@@ -158,7 +158,7 @@ final class SandboxedExecutionContext implements KsqlExecutionContext {
         engineContext,
         serviceContext,
         statement.getSessionConfig()
-    ).executeQuery(statement, excludeTombstones);
+    ).executeTransientQuery(statement, excludeTombstones);
   }
 
   @Override

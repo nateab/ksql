@@ -44,7 +44,7 @@ public final class PullQueryExecutionUtil {
   public static final class ColumnReferenceRewriter
       extends VisitParentExpressionVisitor<Optional<Expression>, Context<Void>> {
 
-    ColumnReferenceRewriter() {
+    public ColumnReferenceRewriter() {
       super(Optional.empty());
     }
 

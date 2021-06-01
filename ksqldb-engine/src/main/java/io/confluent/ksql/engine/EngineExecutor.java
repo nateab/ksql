@@ -171,6 +171,8 @@ final class EngineExecutor {
     RoutingNodeType routingNodeType = null;
 
     try {
+      // TODO: This has already been done in handleStatement.
+      // TODO: If that result is always valid, then we ought to just pass the result in instead of recomputing it.
       final QueryAnalyzer queryAnalyzer = new QueryAnalyzer(engineContext.getMetaStore(), "");
       final ImmutableAnalysis analysis = new RewrittenAnalysis(
           queryAnalyzer.analyze(statement.getStatement(), Optional.empty()),
@@ -251,7 +253,7 @@ final class EngineExecutor {
 
 
   @SuppressWarnings("OptionalGetWithoutIsPresent") // Known to be non-empty
-  TransientQueryMetadata executeQuery(
+  TransientQueryMetadata executeTransientQuery(
       final ConfiguredStatement<Query> statement,
       final boolean excludeTombstones
   ) {

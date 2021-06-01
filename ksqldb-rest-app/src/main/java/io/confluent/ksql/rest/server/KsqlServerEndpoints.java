@@ -208,8 +208,7 @@ public class KsqlServerEndpoints implements Endpoints {
             request,
             connectionClosedFuture,
             isInternalRequest,
-            mediaType,
-            metricsCallbackHolder
+                metricsCallbackHolder
         ), workerExecutor);
   }
 
