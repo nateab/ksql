@@ -574,8 +574,13 @@ public class StreamedQueryResource implements KsqlConfigurable {
     try {
       final ListConsumerGroupOffsetsResult result = admin.listConsumerGroupOffsets(query.getQueryApplicationId());
       final Map<TopicPartition, OffsetAndMetadata> metadataMap = result.partitionsToOffsetAndMetadata().get();
-      final Map<TopicPartition, Long> offsets = metadataMap.entrySet().stream().collect(Collectors.toMap(Map.Entry::getKey, e -> e.getValue().offset()));
-      return endOffsets.equals(offsets);
+      for (Map.Entry<TopicPartition, Long> entry : endOffsets.entrySet()) {
+        final OffsetAndMetadata offsetAndMetadata = metadataMap.get(entry.getKey());
+        if (offsetAndMetadata == null || offsetAndMetadata.offset() < entry.getValue()) {
+          return false;
+        }
+      }
+      return true;
     } catch (ExecutionException | InterruptedException e) {
       throw new RuntimeException(e);
     }
