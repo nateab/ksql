@@ -60,8 +60,6 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.function.Function;
-
-import org.apache.kafka.common.TopicPartition;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -269,25 +267,6 @@ public class KsqlEngine implements KsqlExecutionContext, Closeable {
       final TransientQueryMetadata query = EngineExecutor
           .create(primaryContext, serviceContext, statement.getSessionConfig())
           .executeTransientQuery(statement, excludeTombstones);
-      return query;
-    } catch (final KsqlStatementException e) {
-      throw e;
-    } catch (final KsqlException e) {
-      // add the statement text to the KsqlException
-      throw new KsqlStatementException(e.getMessage(), statement.getStatementText(), e.getCause());
-    }
-  }
-
-  public TransientQueryMetadata executeQuery(
-      final ServiceContext serviceContext,
-      final ConfiguredStatement<Query> statement,
-      final boolean excludeTombstones,
-      final Map<TopicPartition, Long> endOffsets
-  ) {
-    try {
-      final TransientQueryMetadata query = EngineExecutor
-          .create(primaryContext, serviceContext, statement.getSessionConfig())
-          .executeTransientQuery(statement, excludeTombstones, endOffsets);
       return query;
     } catch (final KsqlStatementException e) {
       throw e;

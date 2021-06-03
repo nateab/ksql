@@ -76,6 +76,7 @@ import io.confluent.ksql.rest.Errors;
 import io.confluent.ksql.rest.SessionProperties;
 import io.confluent.ksql.rest.entity.KsqlEntityList;
 import io.confluent.ksql.rest.entity.KsqlErrorMessage;
+import io.confluent.ksql.rest.entity.KsqlMediaType;
 import io.confluent.ksql.rest.entity.KsqlRequest;
 import io.confluent.ksql.rest.entity.KsqlStatementErrorMessage;
 import io.confluent.ksql.rest.entity.StreamedRow;
@@ -278,6 +279,7 @@ public class StreamedQueryResourceTest {
             new KsqlRequest(PULL_QUERY_STRING, Collections.emptyMap(), Collections.emptyMap(), null),
             new CompletableFuture<>(),
             Optional.empty(),
+            KsqlMediaType.LATEST_FORMAT,
             new MetricsCallbackHolder()
         );
 
@@ -348,7 +350,8 @@ public class StreamedQueryResourceTest {
         new KsqlRequest(PULL_QUERY_STRING, Collections.emptyMap(), Collections.emptyMap(), null),
         new CompletableFuture<>(),
         Optional.empty(),
-            new MetricsCallbackHolder()
+        KsqlMediaType.LATEST_FORMAT,
+        new MetricsCallbackHolder()
     );
 
     // Then:
@@ -363,7 +366,8 @@ public class StreamedQueryResourceTest {
           new KsqlRequest(PULL_QUERY_STRING, Collections.emptyMap(), Collections.emptyMap(), null),
           new CompletableFuture<>(),
           Optional.empty(),
-              new MetricsCallbackHolder());
+          KsqlMediaType.LATEST_FORMAT,
+          new MetricsCallbackHolder());
 
       logger.verify(() -> QueryLogger.info("Transient query created",
           PULL_QUERY_STRING), times(1));
@@ -383,7 +387,8 @@ public class StreamedQueryResourceTest {
             new KsqlRequest(PULL_QUERY_STRING, Collections.emptyMap(), Collections.emptyMap(), null),
             new CompletableFuture<>(),
             Optional.empty(),
-                new MetricsCallbackHolder());
+            KsqlMediaType.LATEST_FORMAT,
+            new MetricsCallbackHolder());
 
     // Then:
     assertThat(response.getStatus(), is(500));
@@ -429,7 +434,8 @@ public class StreamedQueryResourceTest {
             new KsqlRequest("query", Collections.emptyMap(), Collections.emptyMap(), null),
             new CompletableFuture<>(),
             Optional.empty(),
-                new MetricsCallbackHolder()
+            KsqlMediaType.LATEST_FORMAT,
+            new MetricsCallbackHolder()
         )
     );
 
@@ -452,7 +458,8 @@ public class StreamedQueryResourceTest {
             new KsqlRequest("query", Collections.emptyMap(), Collections.emptyMap(), null),
             new CompletableFuture<>(),
             Optional.empty(),
-                new MetricsCallbackHolder()
+            KsqlMediaType.LATEST_FORMAT,
+            new MetricsCallbackHolder()
         )
     );
 
@@ -470,7 +477,8 @@ public class StreamedQueryResourceTest {
         new KsqlRequest(PUSH_QUERY_STRING, Collections.emptyMap(), Collections.emptyMap(), null),
         new CompletableFuture<>(),
         Optional.empty(),
-            new MetricsCallbackHolder()
+        KsqlMediaType.LATEST_FORMAT,
+        new MetricsCallbackHolder()
     );
 
     // Then:
@@ -485,7 +493,8 @@ public class StreamedQueryResourceTest {
         new KsqlRequest(PUSH_QUERY_STRING, Collections.emptyMap(), Collections.emptyMap(), 3L),
         new CompletableFuture<>(),
         Optional.empty(),
-            new MetricsCallbackHolder()
+        KsqlMediaType.LATEST_FORMAT,
+        new MetricsCallbackHolder()
     );
 
     // Then:
@@ -507,7 +516,8 @@ public class StreamedQueryResourceTest {
             new KsqlRequest(PUSH_QUERY_STRING, Collections.emptyMap(), Collections.emptyMap(), 3L),
             new CompletableFuture<>(),
             Optional.empty(),
-                new MetricsCallbackHolder()
+            KsqlMediaType.LATEST_FORMAT,
+            new MetricsCallbackHolder()
         )
     );
 
@@ -531,7 +541,8 @@ public class StreamedQueryResourceTest {
         new KsqlRequest(PULL_QUERY_STRING, Collections.emptyMap(), Collections.emptyMap(), null),
         new CompletableFuture<>(),
         Optional.empty(),
-            new MetricsCallbackHolder()
+        KsqlMediaType.LATEST_FORMAT,
+        new MetricsCallbackHolder()
     );
 
     // Then:
@@ -556,7 +567,8 @@ public class StreamedQueryResourceTest {
         new KsqlRequest(PULL_QUERY_STRING, Collections.emptyMap(), Collections.emptyMap(), null),
         new CompletableFuture<>(),
         Optional.empty(),
-            new MetricsCallbackHolder()
+        KsqlMediaType.LATEST_FORMAT,
+        new MetricsCallbackHolder()
     );
 
     final KsqlErrorMessage responseEntity = (KsqlErrorMessage) response.getEntity();
@@ -612,7 +624,8 @@ public class StreamedQueryResourceTest {
         ),
         new CompletableFuture<>(),
         Optional.empty(),
-            new MetricsCallbackHolder()
+        KsqlMediaType.LATEST_FORMAT,
+        new MetricsCallbackHolder()
     );
 
     // Then:
@@ -696,7 +709,8 @@ public class StreamedQueryResourceTest {
             new KsqlRequest(queryString, requestStreamsProperties, Collections.emptyMap(), null),
             new CompletableFuture<>(),
             Optional.empty(),
-                new MetricsCallbackHolder()
+            KsqlMediaType.LATEST_FORMAT,
+            new MetricsCallbackHolder()
         );
     final PipedOutputStream responseOutputStream = new EOFPipedOutputStream();
     final PipedInputStream responseInputStream = new PipedInputStream(responseOutputStream, 1);
@@ -840,7 +854,8 @@ public class StreamedQueryResourceTest {
         new KsqlRequest(PUSH_QUERY_STRING, Collections.emptyMap(), Collections.emptyMap(), null),
         new CompletableFuture<>(),
         Optional.empty(),
-            new MetricsCallbackHolder()
+        KsqlMediaType.LATEST_FORMAT,
+        new MetricsCallbackHolder()
     );
 
     // Then:
@@ -862,7 +877,8 @@ public class StreamedQueryResourceTest {
         new KsqlRequest(PUSH_QUERY_STRING, Collections.emptyMap(), Collections.emptyMap(), null),
         new CompletableFuture<>(),
         Optional.empty(),
-            new MetricsCallbackHolder()
+        KsqlMediaType.LATEST_FORMAT,
+        new MetricsCallbackHolder()
     );
 
     final KsqlErrorMessage responseEntity = (KsqlErrorMessage) response.getEntity();
@@ -888,7 +904,8 @@ public class StreamedQueryResourceTest {
         new KsqlRequest(PRINT_TOPIC, Collections.emptyMap(), Collections.emptyMap(), null),
         new CompletableFuture<>(),
         Optional.empty(),
-            new MetricsCallbackHolder()
+        KsqlMediaType.LATEST_FORMAT,
+        new MetricsCallbackHolder()
     );
 
     assertEquals(response.getStatus(), AUTHORIZATION_ERROR_RESPONSE.getStatus());
@@ -919,7 +936,8 @@ public class StreamedQueryResourceTest {
             new KsqlRequest(PRINT_TOPIC, Collections.emptyMap(), Collections.emptyMap(), null),
             new CompletableFuture<>(),
             Optional.empty(),
-                new MetricsCallbackHolder()
+            KsqlMediaType.LATEST_FORMAT,
+            new MetricsCallbackHolder()
         )
     );
 

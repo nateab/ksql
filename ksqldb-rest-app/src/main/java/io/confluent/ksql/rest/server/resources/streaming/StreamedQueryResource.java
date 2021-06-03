@@ -47,6 +47,7 @@ import io.confluent.ksql.properties.DenyListPropertyValidator;
 import io.confluent.ksql.rest.ApiJsonMapper;
 import io.confluent.ksql.rest.EndpointResponse;
 import io.confluent.ksql.rest.Errors;
+import io.confluent.ksql.rest.entity.KsqlMediaType;
 import io.confluent.ksql.rest.entity.KsqlRequest;
 import io.confluent.ksql.rest.server.KsqlRestConfig;
 import io.confluent.ksql.rest.server.LocalCommands;
@@ -86,8 +87,6 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -231,11 +230,12 @@ public class StreamedQueryResource implements KsqlConfigurable {
   }
 
   public EndpointResponse streamQuery(
-          final KsqlSecurityContext securityContext,
-          final KsqlRequest request,
-          final CompletableFuture<Void> connectionClosedFuture,
-          final Optional<Boolean> isInternalRequest,
-          final MetricsCallbackHolder metricsCallbackHolder
+      final KsqlSecurityContext securityContext,
+      final KsqlRequest request,
+      final CompletableFuture<Void> connectionClosedFuture,
+      final Optional<Boolean> isInternalRequest,
+      final KsqlMediaType mediaType,
+      final MetricsCallbackHolder metricsCallbackHolder
   ) {
     throwIfNotConfigured();
     activenessRegistrar.updateLastRequestTime();
@@ -249,7 +249,7 @@ public class StreamedQueryResource implements KsqlConfigurable {
         commandQueue, request, commandQueueCatchupTimeout);
 
     return handleStatement(securityContext, request, statement, connectionClosedFuture,
-        isInternalRequest, metricsCallbackHolder);
+        isInternalRequest, mediaType, metricsCallbackHolder);
   }
 
   private void throwIfNotConfigured() {
@@ -273,12 +273,13 @@ public class StreamedQueryResource implements KsqlConfigurable {
 
   @SuppressWarnings("unchecked")
   private EndpointResponse handleStatement(
-          final KsqlSecurityContext securityContext,
-          final KsqlRequest request,
-          final PreparedStatement<?> statement,
-          final CompletableFuture<Void> connectionClosedFuture,
-          final Optional<Boolean> isInternalRequest,
-          final MetricsCallbackHolder metricsCallbackHolder
+      final KsqlSecurityContext securityContext,
+      final KsqlRequest request,
+      final PreparedStatement<?> statement,
+      final CompletableFuture<Void> connectionClosedFuture,
+      final Optional<Boolean> isInternalRequest,
+      final KsqlMediaType mediaType,
+      final MetricsCallbackHolder metricsCallbackHolder
   ) {
     try {
       authorizationValidator.ifPresent(validator ->
@@ -297,8 +298,9 @@ public class StreamedQueryResource implements KsqlConfigurable {
             request,
             (PreparedStatement<Query>) statement,
             connectionClosedFuture,
+            mediaType,
             isInternalRequest,
-                metricsCallbackHolder,
+            metricsCallbackHolder,
             configProperties
         );
       } else if (statement.getStatement() instanceof PrintTopic) {
@@ -309,8 +311,8 @@ public class StreamedQueryResource implements KsqlConfigurable {
             connectionClosedFuture);
       } else {
         return Errors.badRequest(String.format(
-                "Statement type `%s' not supported for this resource",
-                statement.getClass().getName()));
+            "Statement type `%s' not supported for this resource",
+            statement.getClass().getName()));
       }
     } catch (final TopicAuthorizationException e) {
       return errorHandler.accessDeniedFromKafkaResponse(e);
@@ -326,6 +328,7 @@ public class StreamedQueryResource implements KsqlConfigurable {
                                        KsqlRequest request,
                                        PreparedStatement<Query> statement,
                                        CompletableFuture<Void> connectionClosedFuture,
+                                       KsqlMediaType mediaType,
                                        Optional<Boolean> isInternalRequest,
                                        MetricsCallbackHolder metricsCallbackHolder,
                                        Map<String, Object> configProperties) {
@@ -366,7 +369,8 @@ public class StreamedQueryResource implements KsqlConfigurable {
               securityContext.getServiceContext(),
               statement,
               configProperties,
-              connectionClosedFuture
+              connectionClosedFuture,
+              mediaType
       );
     }
   }
@@ -506,6 +510,16 @@ public class StreamedQueryResource implements KsqlConfigurable {
     }
   }
 
+  // There's no good way to find out the current position of
+  // Streams's Consumers on specific partitions, so I made this
+  // class to capture the consumers themselves when Streams creates
+  // them, and then crack them open to expose the positions.
+  //
+  // This is obviously horrifying, but it's the best I could come up with for the POC.
+  //
+  // One note, there is a race condition here, since the consumer updates its position
+  // _before_ Streams processes the records. This really speaks to a need to write a KIP
+  // and get some support in Streams.
   public class ServiceContextOverride implements ServiceContext {
     private final ServiceContext delegate;
     private final List<SubscriptionState> capturedConsumers = new LinkedList<SubscriptionState>();
@@ -613,13 +627,13 @@ public class StreamedQueryResource implements KsqlConfigurable {
           try {
             if (subscriptionState.isAssigned(topicPartition)) {
               final SubscriptionState.FetchPosition position = subscriptionState.position(topicPartition);
-              System.out.println(topicPartition + " " + position);
               if (position.offset == entry.getValue()) {
                 finishedPartitions.add(topicPartition);
               }
             }
           } catch (RuntimeException e) {
             e.printStackTrace();
+            throw e;
           }
         }
       }
@@ -628,16 +642,15 @@ public class StreamedQueryResource implements KsqlConfigurable {
   }
 
   private EndpointResponse handleStreamPullQuery(
-          final ServiceContext serviceContext,
-          final PreparedStatement<Query> statement,
-          final Map<String, Object> streamsProperties,
-          final CompletableFuture<Void> connectionClosedFuture,
-          final Map<TopicPartition, Long> endOffsets) {
+      final ServiceContext serviceContext,
+      final PreparedStatement<Query> statement,
+      final Map<String, Object> streamsProperties,
+      final CompletableFuture<Void> connectionClosedFuture,
+      final Map<TopicPartition, Long> endOffsets) {
+
+    // stream pull queries always start from earliest.
     streamsProperties.put("auto.offset.reset", "earliest");
-    streamsProperties.put(StreamsConfig.METRICS_RECORDING_LEVEL_CONFIG, "DEBUG");
-    streamsProperties.put("john.poc.endOffsets", new ConcurrentHashMap<>(endOffsets));
-    final CountDownLatch semaphore = new CountDownLatch(endOffsets.size());
-    streamsProperties.put("john.poc.semaphore", semaphore);
+
     final ConfiguredStatement<Query> configured = ConfiguredStatement
         .of(statement, SessionConfig.of(ksqlConfig, streamsProperties));
 
@@ -652,7 +665,7 @@ public class StreamedQueryResource implements KsqlConfigurable {
     final ServiceContextOverride override = new ServiceContextOverride(serviceContext);
 
     final TransientQueryMetadata query = ksqlEngine
-        .executeQuery(override, configured, false, endOffsets);
+        .executeQuery(override, configured, false);
 
     localCommands.ifPresent(lc -> lc.write(query));
 
@@ -660,36 +673,31 @@ public class StreamedQueryResource implements KsqlConfigurable {
         query,
         disconnectCheckInterval.toMillis(),
         OBJECT_MAPPER,
-        connectionClosedFuture,
-        endOffsets
+        connectionClosedFuture
     );
 
-//    final ExecutorService singleThreadExecutor = Executors.newSingleThreadExecutor(new ThreadFactoryBuilder().setDaemon(true).setNameFormat("john-poc-%d").build());
-//    singleThreadExecutor.submit(() -> {
-//      try {
-//        semaphore.await();
-//      } catch (InterruptedException e) {
-//        System.out.println("interrupted.");
-//      }
-//      System.out.println("stopping query.");
-//      queryStreamWriter.close();
-//      singleThreadExecutor.shutdown();
-//    });
-
+    // Yes, I know I'm committing a Vert.X sin here.
+    // We need an extra thread because
+    // I couldn't come up with a reliable way to stop the query from
+    // inside Streams, plus our close() method is blocking, so we can't
+    // call it from a StreamThread anyway.
+    // Clearly, this should be done on the worker pool if we were really
+    // taking this approach, but I think we should consider first-class
+    // support of some kind in Streams instead.
     final ScheduledExecutorService scheduledExecutorService = Executors.newSingleThreadScheduledExecutor(
         new ThreadFactoryBuilder().setDaemon(true).setNameFormat("john-poc-%d").build()
     );
     scheduledExecutorService.scheduleWithFixedDelay(
         () -> {
-          System.out.println("ping");
           if (override.passed(endOffsets)) {
-            System.out.println("closing stream");
+            log.info("Query '{}' is complete. Closing.", statement.getStatementText());
+            // NOTE: this isn't going to print an end bracket, but it seems to be ok(?)
             queryStreamWriter.close();
             scheduledExecutorService.shutdown();
           }
           },
-        100,
-            100,
+          100,
+          100,
         TimeUnit.MILLISECONDS
     );
 
@@ -698,10 +706,11 @@ public class StreamedQueryResource implements KsqlConfigurable {
   }
 
   private EndpointResponse handlePushQuery(
-          final ServiceContext serviceContext,
-          final PreparedStatement<Query> statement,
-          final Map<String, Object> streamsProperties,
-          final CompletableFuture<Void> connectionClosedFuture
+      final ServiceContext serviceContext,
+      final PreparedStatement<Query> statement,
+      final Map<String, Object> streamsProperties,
+      final CompletableFuture<Void> connectionClosedFuture,
+      final KsqlMediaType mediaType
   ) {
     final ConfiguredStatement<Query> configured = ConfiguredStatement
         .of(statement, SessionConfig.of(ksqlConfig, streamsProperties));
