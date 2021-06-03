@@ -19,6 +19,8 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.util.concurrent.RateLimiter;
+import com.google.common.util.concurrent.ThreadFactoryBuilder;
+import io.confluent.kafka.schemaregistry.client.SchemaRegistryClient;
 import io.confluent.ksql.GenericRow;
 import io.confluent.ksql.analyzer.ImmutableAnalysis;
 import io.confluent.ksql.analyzer.PullQueryValidator;
@@ -58,26 +60,56 @@ import io.confluent.ksql.rest.util.ConcurrencyLimiter.Decrementer;
 import io.confluent.ksql.rest.util.QueryCapacityUtil;
 import io.confluent.ksql.security.KsqlAuthorizationValidator;
 import io.confluent.ksql.security.KsqlSecurityContext;
+import io.confluent.ksql.services.ConnectClient;
+import io.confluent.ksql.services.KafkaConsumerGroupClient;
+import io.confluent.ksql.services.KafkaTopicClient;
 import io.confluent.ksql.services.ServiceContext;
+import io.confluent.ksql.services.SimpleKsqlClient;
 import io.confluent.ksql.statement.ConfiguredStatement;
 import io.confluent.ksql.util.KsqlConfig;
 import io.confluent.ksql.util.KsqlException;
 import io.confluent.ksql.util.KsqlStatementException;
 import io.confluent.ksql.util.TransientQueryMetadata;
 import io.confluent.ksql.version.metrics.ActivenessRegistrar;
+
+import java.lang.reflect.Field;
 import java.time.Clock;
 import java.time.Duration;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
+import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Supplier;
 import java.util.stream.Collectors;
+
+import org.apache.kafka.clients.admin.Admin;
+import org.apache.kafka.clients.admin.DescribeTopicsResult;
+import org.apache.kafka.clients.admin.TopicDescription;
+import org.apache.kafka.clients.consumer.Consumer;
+import org.apache.kafka.clients.consumer.KafkaConsumer;
+import org.apache.kafka.clients.consumer.internals.Fetcher;
+import org.apache.kafka.clients.consumer.internals.SubscriptionState;
+import org.apache.kafka.clients.producer.Producer;
+import org.apache.kafka.common.KafkaFuture;
+import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.errors.TopicAuthorizationException;
+import org.apache.kafka.streams.KafkaClientSupplier;
 import org.apache.kafka.streams.StreamsConfig;
+import org.apache.kafka.streams.processor.internals.DefaultKafkaClientSupplier;
 import org.jetbrains.annotations.NotNull;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -304,7 +336,8 @@ public class StreamedQueryResource implements KsqlConfigurable {
               queryAnalyzer.analyze(statement.getStatement(), Optional.empty()),
               new PullQueryExecutionUtil.ColumnReferenceRewriter()::process
       );
-      final DataSource.DataSourceType dataSourceType = analysis.getFrom().getDataSource().getDataSourceType();
+      final DataSource dataSource = analysis.getFrom().getDataSource();
+      final DataSource.DataSourceType dataSourceType = dataSource.getDataSourceType();
       switch (dataSourceType) {
         case KTABLE:
           return handleTablePullQuery(
@@ -317,11 +350,13 @@ public class StreamedQueryResource implements KsqlConfigurable {
                   metricsCallbackHolder
           );
         case KSTREAM:
+          final Map<TopicPartition, Long> endOffsets = getEndOffsets(dataSource);
           return handleStreamPullQuery(
                   securityContext.getServiceContext(),
                   statement,
                   configProperties,
-                  connectionClosedFuture
+                  connectionClosedFuture,
+                  endOffsets
           );
         default:
           throw new KsqlException("Unexpected data source type for pull query: " + dataSourceType);
@@ -334,6 +369,37 @@ public class StreamedQueryResource implements KsqlConfigurable {
               connectionClosedFuture
       );
     }
+  }
+
+  @NotNull
+  private Map<TopicPartition, Long> getEndOffsets(DataSource dataSource) {
+    final DefaultKafkaClientSupplier defaultKafkaClientSupplier = new DefaultKafkaClientSupplier();
+    final Map<TopicPartition, Long> endOffsets;
+    try (Admin admin = defaultKafkaClientSupplier
+            .getAdmin(ksqlConfig.getKsqlAdminClientConfigProps())) {
+      try (Consumer<byte[], byte[]> consumer = defaultKafkaClientSupplier.getConsumer(ksqlConfig.getKsqlAdminClientConfigProps())) {
+        final String topicName = dataSource.getKafkaTopicName();
+        final DescribeTopicsResult describeTopicsResult = admin.describeTopics(Collections.singletonList(topicName));
+        final KafkaFuture<TopicDescription> topicDescriptionKafkaFuture = describeTopicsResult.values().get(topicName);
+        final TopicDescription topicDescription;
+        try {
+          // TODO nonblocking
+          topicDescription = topicDescriptionKafkaFuture.get();
+        } catch (InterruptedException | ExecutionException e) {
+          throw new RuntimeException(e);
+        }
+        final List<TopicPartition> topicPartitions =
+                topicDescription
+                        .partitions()
+                        .stream()
+                        .map(td -> new TopicPartition(topicName, td.partition()))
+                        .collect(Collectors.toList());
+        consumer.assign(topicPartitions);
+        consumer.seekToEnd(topicPartitions);
+        endOffsets = topicPartitions.stream().collect(Collectors.toMap(tp -> tp, consumer::position));
+      }
+    }
+    return endOffsets;
   }
 
   private EndpointResponse handleTablePullQuery(
@@ -440,12 +506,138 @@ public class StreamedQueryResource implements KsqlConfigurable {
     }
   }
 
+  public class ServiceContextOverride implements ServiceContext {
+    private final ServiceContext delegate;
+    private final List<SubscriptionState> capturedConsumers = new LinkedList<SubscriptionState>();
+    private final Field fetcherField;
+    private final Field subscriptionsField;
+
+    public ServiceContextOverride(final ServiceContext delegate) {
+
+      this.delegate = delegate;
+      try {
+        this.fetcherField = KafkaConsumer.class.getDeclaredField("fetcher");
+        fetcherField.setAccessible(true);
+        this.subscriptionsField = Fetcher.class.getDeclaredField("subscriptions");
+        subscriptionsField.setAccessible(true);
+      } catch (NoSuchFieldException e) {
+        throw new RuntimeException(e);
+      }
+
+    }
+
+    @Override
+    public Admin getAdminClient() {
+      return delegate.getAdminClient();
+    }
+
+    @Override
+    public KafkaTopicClient getTopicClient() {
+      return delegate.getTopicClient();
+    }
+
+    @Override
+    public KafkaClientSupplier getKafkaClientSupplier() {
+      final KafkaClientSupplier delegateKafkaClientSupplier = delegate.getKafkaClientSupplier();
+      return new KafkaClientSupplier() {
+        @Override
+        public Producer<byte[], byte[]> getProducer(Map<String, Object> map) {
+          return delegateKafkaClientSupplier.getProducer(map);
+        }
+
+        @Override
+        public Consumer<byte[], byte[]> getConsumer(Map<String, Object> map) {
+          final Consumer<byte[], byte[]> consumer = delegateKafkaClientSupplier.getConsumer(map);
+          try {
+            final Fetcher fetcher = (Fetcher) fetcherField.get(consumer);
+            final SubscriptionState subscriptionState = (SubscriptionState) subscriptionsField.get(fetcher);
+            capturedConsumers.add(subscriptionState);
+          } catch (IllegalAccessException e) {
+            throw new RuntimeException(e);
+          }
+          return consumer;
+        }
+
+        @Override
+        public Consumer<byte[], byte[]> getRestoreConsumer(Map<String, Object> map) {
+          return delegateKafkaClientSupplier.getRestoreConsumer(map);
+        }
+
+        @Override
+        public Consumer<byte[], byte[]> getGlobalConsumer(Map<String, Object> map) {
+          return delegateKafkaClientSupplier.getGlobalConsumer(map);
+        }
+
+        @Override
+        public Admin getAdmin(Map<String, Object> config) {
+          return delegateKafkaClientSupplier.getAdmin(config);
+        }
+      };
+    }
+
+    @Override
+    public SchemaRegistryClient getSchemaRegistryClient() {
+      return delegate.getSchemaRegistryClient();
+    }
+
+    @Override
+    public Supplier<SchemaRegistryClient> getSchemaRegistryClientFactory() {
+      return delegate.getSchemaRegistryClientFactory();
+    }
+
+    @Override
+    public ConnectClient getConnectClient() {
+      return delegate.getConnectClient();
+    }
+
+    @Override
+    public SimpleKsqlClient getKsqlClient() {
+      return delegate.getKsqlClient();
+    }
+
+    @Override
+    public KafkaConsumerGroupClient getConsumerGroupClient() {
+      return delegate.getConsumerGroupClient();
+    }
+
+    @Override
+    public void close() {
+      delegate.close();
+    }
+
+    public boolean passed(Map<TopicPartition, Long> endOffsets) {
+      final Set<TopicPartition> finishedPartitions = new HashSet<>();
+      for (SubscriptionState subscriptionState : capturedConsumers) {
+        for (Map.Entry<TopicPartition, Long> entry : endOffsets.entrySet()) {
+          final TopicPartition topicPartition = entry.getKey();
+          try {
+            if (subscriptionState.isAssigned(topicPartition)) {
+              final SubscriptionState.FetchPosition position = subscriptionState.position(topicPartition);
+              System.out.println(topicPartition + " " + position);
+              if (position.offset == entry.getValue()) {
+                finishedPartitions.add(topicPartition);
+              }
+            }
+          } catch (RuntimeException e) {
+            e.printStackTrace();
+          }
+        }
+      }
+      return finishedPartitions.equals(endOffsets.keySet());
+    }
+  }
+
   private EndpointResponse handleStreamPullQuery(
           final ServiceContext serviceContext,
           final PreparedStatement<Query> statement,
           final Map<String, Object> streamsProperties,
-          final CompletableFuture<Void> connectionClosedFuture
-  ) {
+          final CompletableFuture<Void> connectionClosedFuture,
+          final Map<TopicPartition, Long> endOffsets) {
+    streamsProperties.put("auto.offset.reset", "earliest");
+    streamsProperties.put(StreamsConfig.METRICS_RECORDING_LEVEL_CONFIG, "DEBUG");
+    streamsProperties.put("john.poc.endOffsets", new ConcurrentHashMap<>(endOffsets));
+    final CountDownLatch semaphore = new CountDownLatch(endOffsets.size());
+    streamsProperties.put("john.poc.semaphore", semaphore);
     final ConfiguredStatement<Query> configured = ConfiguredStatement
         .of(statement, SessionConfig.of(ksqlConfig, streamsProperties));
 
@@ -457,8 +649,10 @@ public class StreamedQueryResource implements KsqlConfigurable {
       );
     }
 
+    final ServiceContextOverride override = new ServiceContextOverride(serviceContext);
+
     final TransientQueryMetadata query = ksqlEngine
-        .executeQuery(serviceContext, configured, false);
+        .executeQuery(override, configured, false, endOffsets);
 
     localCommands.ifPresent(lc -> lc.write(query));
 
@@ -466,7 +660,37 @@ public class StreamedQueryResource implements KsqlConfigurable {
         query,
         disconnectCheckInterval.toMillis(),
         OBJECT_MAPPER,
-        connectionClosedFuture
+        connectionClosedFuture,
+        endOffsets
+    );
+
+//    final ExecutorService singleThreadExecutor = Executors.newSingleThreadExecutor(new ThreadFactoryBuilder().setDaemon(true).setNameFormat("john-poc-%d").build());
+//    singleThreadExecutor.submit(() -> {
+//      try {
+//        semaphore.await();
+//      } catch (InterruptedException e) {
+//        System.out.println("interrupted.");
+//      }
+//      System.out.println("stopping query.");
+//      queryStreamWriter.close();
+//      singleThreadExecutor.shutdown();
+//    });
+
+    final ScheduledExecutorService scheduledExecutorService = Executors.newSingleThreadScheduledExecutor(
+        new ThreadFactoryBuilder().setDaemon(true).setNameFormat("john-poc-%d").build()
+    );
+    scheduledExecutorService.scheduleWithFixedDelay(
+        () -> {
+          System.out.println("ping");
+          if (override.passed(endOffsets)) {
+            System.out.println("closing stream");
+            queryStreamWriter.close();
+            scheduledExecutorService.shutdown();
+          }
+          },
+        100,
+            100,
+        TimeUnit.MILLISECONDS
     );
 
     log.info("Streaming query '{}'", statement.getStatementText());

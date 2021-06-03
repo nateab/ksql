@@ -70,10 +70,13 @@ import io.confluent.ksql.util.TransientQueryMetadata;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
+
+import org.apache.kafka.common.TopicPartition;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -256,6 +259,39 @@ final class EngineExecutor {
   TransientQueryMetadata executeTransientQuery(
       final ConfiguredStatement<Query> statement,
       final boolean excludeTombstones
+  ) {
+    final ExecutorPlans plans = planQuery(statement, statement.getStatement(),
+        Optional.empty(), Optional.empty());
+    final KsqlBareOutputNode outputNode = (KsqlBareOutputNode) plans.logicalPlan.getNode().get();
+    engineContext.createQueryValidator().validateQuery(
+        config,
+        plans.physicalPlan,
+        engineContext.getQueryRegistry().getAllLiveQueries()
+    );
+    return engineContext.getQueryRegistry().createTransientQuery(
+        config,
+        serviceContext,
+        engineContext.getProcessingLogContext(),
+        engineContext.getMetaStore(),
+        statement.getStatementText(),
+        plans.physicalPlan.getQueryId(),
+        getSourceNames(outputNode),
+        plans.physicalPlan.getPhysicalPlan(),
+        buildPlanSummary(
+            plans.physicalPlan.getQueryId(),
+            plans.physicalPlan.getPhysicalPlan()),
+        outputNode.getSchema(),
+        outputNode.getLimit(),
+        outputNode.getWindowInfo(),
+        excludeTombstones
+    );
+  }
+
+  @SuppressWarnings("OptionalGetWithoutIsPresent") // Known to be non-empty
+  TransientQueryMetadata executeTransientQuery(
+      final ConfiguredStatement<Query> statement,
+      final boolean excludeTombstones,
+      final Map<TopicPartition, Long> endOffsets
   ) {
     final ExecutorPlans plans = planQuery(statement, statement.getStatement(),
         Optional.empty(), Optional.empty());

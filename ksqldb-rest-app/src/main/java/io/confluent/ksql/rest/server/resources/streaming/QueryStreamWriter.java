@@ -32,10 +32,12 @@ import java.io.IOException;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 
+import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.streams.errors.StreamsUncaughtExceptionHandler;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -49,6 +51,7 @@ class QueryStreamWriter implements StreamingOutput {
   private final long disconnectCheckInterval;
   private final ObjectMapper objectMapper;
   private final TombstoneFactory tombstoneFactory;
+  private final Map<TopicPartition, Long> endOffsets;
   private volatile Exception streamsException;
   private volatile boolean limitReached = false;
   private volatile boolean connectionClosed;
@@ -58,7 +61,8 @@ class QueryStreamWriter implements StreamingOutput {
       final TransientQueryMetadata queryMetadata,
       final long disconnectCheckInterval,
       final ObjectMapper objectMapper,
-      final CompletableFuture<Void> connectionClosedFuture
+      final CompletableFuture<Void> connectionClosedFuture,
+      final Map<TopicPartition, Long> endOffsets
   ) {
     this.objectMapper = Objects.requireNonNull(objectMapper, "objectMapper");
     this.disconnectCheckInterval = disconnectCheckInterval;
@@ -67,7 +71,17 @@ class QueryStreamWriter implements StreamingOutput {
     this.queryMetadata.setUncaughtExceptionHandler(new StreamsExceptionHandler());
     this.tombstoneFactory = TombstoneFactory.create(queryMetadata);
     connectionClosedFuture.thenAccept(v -> connectionClosed = true);
+    this.endOffsets = endOffsets;
     queryMetadata.start();
+  }
+
+  QueryStreamWriter(
+      final TransientQueryMetadata queryMetadata,
+      final long disconnectCheckInterval,
+      final ObjectMapper objectMapper,
+      final CompletableFuture<Void> connectionClosedFuture
+  ) {
+    this(queryMetadata, disconnectCheckInterval, objectMapper, connectionClosedFuture, null);
   }
 
   @Override
