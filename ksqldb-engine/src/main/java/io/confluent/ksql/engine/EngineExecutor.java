@@ -171,9 +171,11 @@ final class EngineExecutor {
     RoutingNodeType routingNodeType = null;
 
     try {
-      // TODO: This has already been done in handleStatement.
-      // TODO: If that result is always valid, then we ought to just pass the result in instead of recomputing it.
-      final QueryAnalyzer queryAnalyzer = new QueryAnalyzer(engineContext.getMetaStore(), "");
+      // This has already been done in handleStatement.
+      // If that result is always valid, then we ought to
+      // just pass the result in instead of recomputing it.
+      final QueryAnalyzer queryAnalyzer =
+              new QueryAnalyzer(engineContext.getMetaStore(), "");
       final ImmutableAnalysis analysis = new RewrittenAnalysis(
           queryAnalyzer.analyze(statement.getStatement(), Optional.empty()),
           new PullQueryExecutionUtil.ColumnReferenceRewriter()::process

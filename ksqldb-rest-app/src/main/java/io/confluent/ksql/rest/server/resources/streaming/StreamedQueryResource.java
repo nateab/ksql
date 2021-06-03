@@ -113,6 +113,7 @@ import org.jetbrains.annotations.NotNull;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+@SuppressWarnings("checkstyle:ClassDataAbstractionCoupling")
 public class StreamedQueryResource implements KsqlConfigurable {
 
   private static final Logger log = LoggerFactory.getLogger(StreamedQueryResource.class);
@@ -324,14 +325,14 @@ public class StreamedQueryResource implements KsqlConfigurable {
   }
 
   @NotNull
-  private EndpointResponse handleQuery(KsqlSecurityContext securityContext,
-                                       KsqlRequest request,
-                                       PreparedStatement<Query> statement,
-                                       CompletableFuture<Void> connectionClosedFuture,
-                                       KsqlMediaType mediaType,
-                                       Optional<Boolean> isInternalRequest,
-                                       MetricsCallbackHolder metricsCallbackHolder,
-                                       Map<String, Object> configProperties) {
+  private EndpointResponse handleQuery(final KsqlSecurityContext securityContext,
+                                       final KsqlRequest request,
+                                       final PreparedStatement<Query> statement,
+                                       final CompletableFuture<Void> connectionClosedFuture,
+                                       final KsqlMediaType mediaType,
+                                       final Optional<Boolean> isInternalRequest,
+                                       final MetricsCallbackHolder metricsCallbackHolder,
+                                       final Map<String, Object> configProperties) {
 
     if (statement.getStatement().isPullQuery()) {
       final QueryAnalyzer queryAnalyzer = new QueryAnalyzer(ksqlEngine.getMetaStore(), "");
@@ -379,15 +380,18 @@ public class StreamedQueryResource implements KsqlConfigurable {
   private Map<TopicPartition, Long> getEndOffsets(DataSource dataSource) {
     final DefaultKafkaClientSupplier defaultKafkaClientSupplier = new DefaultKafkaClientSupplier();
     final Map<TopicPartition, Long> endOffsets;
+    // these are not the right configs to pass a consumer.
+    final Map<String, Object> props = ksqlConfig.getKsqlAdminClientConfigProps();
     try (Admin admin = defaultKafkaClientSupplier
-            .getAdmin(ksqlConfig.getKsqlAdminClientConfigProps())) {
-      try (Consumer<byte[], byte[]> consumer = defaultKafkaClientSupplier.getConsumer(ksqlConfig.getKsqlAdminClientConfigProps())) {
+            .getAdmin(props)) {
+      try (Consumer<byte[], byte[]> consumer =
+                   defaultKafkaClientSupplier.getConsumer(props)) {
         final String topicName = dataSource.getKafkaTopicName();
         final DescribeTopicsResult describeTopicsResult = admin.describeTopics(Collections.singletonList(topicName));
         final KafkaFuture<TopicDescription> topicDescriptionKafkaFuture = describeTopicsResult.values().get(topicName);
         final TopicDescription topicDescription;
         try {
-          // TODO nonblocking
+          // Should make this nonblocking
           topicDescription = topicDescriptionKafkaFuture.get();
         } catch (InterruptedException | ExecutionException e) {
           throw new RuntimeException(e);
@@ -555,16 +559,17 @@ public class StreamedQueryResource implements KsqlConfigurable {
       final KafkaClientSupplier delegateKafkaClientSupplier = delegate.getKafkaClientSupplier();
       return new KafkaClientSupplier() {
         @Override
-        public Producer<byte[], byte[]> getProducer(Map<String, Object> map) {
+        public Producer<byte[], byte[]> getProducer(final Map<String, Object> map) {
           return delegateKafkaClientSupplier.getProducer(map);
         }
 
         @Override
-        public Consumer<byte[], byte[]> getConsumer(Map<String, Object> map) {
+        public Consumer<byte[], byte[]> getConsumer(final Map<String, Object> map) {
           final Consumer<byte[], byte[]> consumer = delegateKafkaClientSupplier.getConsumer(map);
           try {
             final Fetcher fetcher = (Fetcher) fetcherField.get(consumer);
-            final SubscriptionState subscriptionState = (SubscriptionState) subscriptionsField.get(fetcher);
+            final SubscriptionState subscriptionState =
+                    (SubscriptionState) subscriptionsField.get(fetcher);
             capturedConsumers.add(subscriptionState);
           } catch (IllegalAccessException e) {
             throw new RuntimeException(e);
@@ -573,12 +578,12 @@ public class StreamedQueryResource implements KsqlConfigurable {
         }
 
         @Override
-        public Consumer<byte[], byte[]> getRestoreConsumer(Map<String, Object> map) {
+        public Consumer<byte[], byte[]> getRestoreConsumer(final Map<String, Object> map) {
           return delegateKafkaClientSupplier.getRestoreConsumer(map);
         }
 
         @Override
-        public Consumer<byte[], byte[]> getGlobalConsumer(Map<String, Object> map) {
+        public Consumer<byte[], byte[]> getGlobalConsumer(final Map<String, Object> map) {
           return delegateKafkaClientSupplier.getGlobalConsumer(map);
         }
 
@@ -619,7 +624,7 @@ public class StreamedQueryResource implements KsqlConfigurable {
       delegate.close();
     }
 
-    public boolean passed(Map<TopicPartition, Long> endOffsets) {
+    public boolean passed(final Map<TopicPartition, Long> endOffsets) {
       final Set<TopicPartition> finishedPartitions = new HashSet<>();
       for (SubscriptionState subscriptionState : capturedConsumers) {
         for (Map.Entry<TopicPartition, Long> entry : endOffsets.entrySet()) {
