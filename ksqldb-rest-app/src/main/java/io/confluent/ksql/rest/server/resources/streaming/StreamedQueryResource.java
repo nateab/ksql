@@ -101,6 +101,7 @@ import org.jetbrains.annotations.NotNull;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+@SuppressWarnings("ClassDataAbstractionCoupling")
 public class StreamedQueryResource implements KsqlConfigurable {
 
   private static final Logger log = LoggerFactory.getLogger(StreamedQueryResource.class);
@@ -364,7 +365,7 @@ public class StreamedQueryResource implements KsqlConfigurable {
   }
 
   @NotNull
-  private Map<TopicPartition, Long> getEndOffsets(DataSource dataSource) {
+  private Map<TopicPartition, Long> getEndOffsets(final DataSource dataSource) {
     final DefaultKafkaClientSupplier defaultKafkaClientSupplier = new DefaultKafkaClientSupplier();
     final Map<TopicPartition, Long> endOffsets;
     // these are not the right configs to pass a consumer.
@@ -374,8 +375,10 @@ public class StreamedQueryResource implements KsqlConfigurable {
       try (Consumer<byte[], byte[]> consumer =
                    defaultKafkaClientSupplier.getConsumer(props)) {
         final String topicName = dataSource.getKafkaTopicName();
-        final DescribeTopicsResult describeTopicsResult = admin.describeTopics(Collections.singletonList(topicName));
-        final KafkaFuture<TopicDescription> topicDescriptionKafkaFuture = describeTopicsResult.values().get(topicName);
+        final DescribeTopicsResult describeTopicsResult =
+                admin.describeTopics(Collections.singletonList(topicName));
+        final KafkaFuture<TopicDescription> topicDescriptionKafkaFuture =
+                describeTopicsResult.values().get(topicName);
         final TopicDescription topicDescription;
         try {
           // Should make this nonblocking
@@ -391,7 +394,8 @@ public class StreamedQueryResource implements KsqlConfigurable {
                         .collect(Collectors.toList());
         consumer.assign(topicPartitions);
         consumer.seekToEnd(topicPartitions);
-        endOffsets = topicPartitions.stream().collect(Collectors.toMap(tp -> tp, consumer::position));
+        endOffsets =
+                topicPartitions.stream().collect(Collectors.toMap(tp -> tp, consumer::position));
       }
     }
     return endOffsets;
@@ -545,9 +549,10 @@ public class StreamedQueryResource implements KsqlConfigurable {
     // Clearly, this should be done on the worker pool if we were really
     // taking this approach, but I think we should consider first-class
     // support of some kind in Streams instead.
-    final ScheduledExecutorService scheduledExecutorService = Executors.newSingleThreadScheduledExecutor(
-        new ThreadFactoryBuilder().setDaemon(true).setNameFormat("john-poc-%d").build()
-    );
+    final ScheduledExecutorService scheduledExecutorService =
+        Executors.newSingleThreadScheduledExecutor(
+            new ThreadFactoryBuilder().setDaemon(true).setNameFormat("john-poc-%d").build()
+        );
     final Admin admin = Admin.create(ksqlConfig.getKsqlAdminClientConfigProps());
     scheduledExecutorService.scheduleWithFixedDelay(
         () -> {
@@ -558,9 +563,9 @@ public class StreamedQueryResource implements KsqlConfigurable {
             admin.close();
             scheduledExecutorService.shutdown();
           }
-          },
-          100,
-          50,
+        },
+        100,
+        50,
         TimeUnit.MILLISECONDS
     );
 
@@ -572,8 +577,10 @@ public class StreamedQueryResource implements KsqlConfigurable {
                                    final TransientQueryMetadata query,
                                    final Map<TopicPartition, Long> endOffsets) {
     try {
-      final ListConsumerGroupOffsetsResult result = admin.listConsumerGroupOffsets(query.getQueryApplicationId());
-      final Map<TopicPartition, OffsetAndMetadata> metadataMap = result.partitionsToOffsetAndMetadata().get();
+      final ListConsumerGroupOffsetsResult result =
+              admin.listConsumerGroupOffsets(query.getQueryApplicationId());
+      final Map<TopicPartition, OffsetAndMetadata> metadataMap =
+              result.partitionsToOffsetAndMetadata().get();
       for (Map.Entry<TopicPartition, Long> entry : endOffsets.entrySet()) {
         final OffsetAndMetadata offsetAndMetadata = metadataMap.get(entry.getKey());
         if (offsetAndMetadata == null || offsetAndMetadata.offset() < entry.getValue()) {
