@@ -367,7 +367,6 @@ public class StreamedQueryResource implements KsqlConfigurable {
   @NotNull
   private Map<TopicPartition, Long> getEndOffsets(final DataSource dataSource) {
     final DefaultKafkaClientSupplier defaultKafkaClientSupplier = new DefaultKafkaClientSupplier();
-    final Map<TopicPartition, Long> endOffsets;
     // these are not the right configs to pass a consumer.
     final Map<String, Object> props = ksqlConfig.getKsqlAdminClientConfigProps();
     try (Admin admin = defaultKafkaClientSupplier
@@ -394,13 +393,12 @@ public class StreamedQueryResource implements KsqlConfigurable {
                         .collect(Collectors.toList());
         consumer.assign(topicPartitions);
         consumer.seekToEnd(topicPartitions);
-        endOffsets =
-                topicPartitions.stream().collect(Collectors.toMap(tp -> tp, consumer::position));
+        return topicPartitions.stream().collect(Collectors.toMap(tp -> tp, consumer::position));
       }
     }
-    return endOffsets;
   }
 
+  @NotNull
   private EndpointResponse handleTablePullQuery(
       final ServiceContext serviceContext,
       final PreparedStatement<Query> statement,
